@@ -39,13 +39,6 @@ def simiu(v10, I10, alpha, f, z):
     return ret
 
 @numba.jit(nopython=True)
-def coherence():
-    # TODO:
-    for i in range(npts):
-        for j in range(npts):
-            coh[:,i,j] = np.exp(-2 * f * np.sqrt(cx * cx * (x[i] - x[j]) ** 2 + cy * cy * (y[i] -y[j]) ** 2 + cz * cz * (z[i] - z[j]) ** 2) / (vz[i] + vz[j]))
-
-@numba.jit(nopython=True)
 def cross_spectrum(Sw, coh):
     npts = Sw.shape[-1]
     for i in range(npts):
@@ -61,7 +54,7 @@ def synthesis(Hw, nfreq, m, dw, npts, phi, t):
         for j in range(nfreq):
             for k in range(i+1):
                 wml = j * dw + (1+k) * dw / npts
-                tmp = 2 * np.sqrt(dw / 2.0 / np.pi) * np.cos(wml * t + phi[k, j])
+                tmp = 2.0 * np.sqrt(dw / 2.0 / np.pi) * np.cos(wml * t + phi[k,j])
                 vt[:,i] += np.abs(Hw[j,k,i]) * tmp
     return vt
 
@@ -121,17 +114,57 @@ class ConfigData(object):
 
 
 class GustWindField(object):
+    """ Gust wind field simulation
+        1) wind profile is governed by power law vz = v10 * (z / 10) ** alpha
+        2) support different type wind spectrum
+        3) only support coherence function proposed by Davenport
 
+    Args:
+        workdir (float): working directory
+        points (2d-ndarray): simulated points, [[id, x, y, z], ...]
+        v10 (float): reference wind speed at 10m height
+        I10 (float): reference turbulence intensity at 10m height
+        alpha (float): wind profile power exponent
+        spectrum (string): wind spectrum type
+        coherence (string): coherence function type, not support yet
+        cx, cy, cz (float): coefficients of coherence function
+        k (float): karman constant
+        z0 (float): ground roughness length
+        t (float): total time of the simulated wind history
+        wup (float): upper boundary of the cut-off frequency, (rad/s)
+        N (int): number of frequncy segments
+        dw (float): frequency step, wup / N
+        dt (float): time step
+
+        Sw (3d-ndarray): cross spectrum matrix
+        Hw (3d-ndarray): Hw = cholesky(Sw)
+        coh (3d-ndarray): coherence coeffiecient matrix
+
+    Methods:
+        set_points(points): self.points = points
+        generate(): generate the gust wind field
+        error(): error analysis
+    """
     def __init__(self, config):
         if not isinstance(config, ConfigData):
             raise ValueError("config must be an ConfigData object!")
         # parse the parameters from config object
+        # file parameters
+        self.workdir = os.path.abspath(config.workdir)
+
+        # points parameters
+        fname = os.path.join(self.workdir, "points.csv")
+        if config.is_read_points:
+            self.points = np.loadtxt(fname, delimiter=",", skiprows=1)
+        else:
+            self.points = None
+
         # wind parameters
         self.v10 = config.v10
         self.I10 = config.I10
         self.alpha = config.alpha
-        self.spectrum_type = config.spectrum_type
-        self.coherence_type = config.coh_type
+        self.spectrum = config.spectrum_type.lower()
+        self.coherence = config.coh_type.lower()
         self.cx = config.cx
         self.cy = config.cy
         self.cz = config.cz
@@ -147,19 +180,6 @@ class GustWindField(object):
         self.dw = self.wup / self.N
         self.dt = 10 ** np.floor(np.log10(np.pi / self.wup))   # dt <= pi / wup
 
-        # file parameters
-        self.workdir = os.path.abspath(config.workdir)
-
-        # points parameters
-        fname = os.path.join(self.workdir, "points.csv")
-        if config.is_read_points:
-            self.points = np.loadtxt(fname, delimiter=",", skiprows=1)
-            # self.npts = len(self.points)
-        else:
-            self.points = None
-            # self.num_points = None
-            print("Please assign simulated points")
-
         # other attributes
         self.coh = None
         self.Sw = None
@@ -169,7 +189,6 @@ class GustWindField(object):
         if not isinstance(points, np.ndarray):
             raise ValueError("points must be ndarray")
         self.points = points
-        # self.num_points = len(points)
 
     def _spectrum(self):
         if self.points is None:
@@ -179,9 +198,8 @@ class GustWindField(object):
 
         z = self.points[:,3]
         vz = self.v10 * (z / 10) ** self.alpha
-        u_star = self.I10 * self.v10 / np.sqrt(6)
         f = np.arange(self.dw, self.wup + self.dw, self.dw) / 2.0 / np.pi
-        command = self.spectrum_type + "(self.v10, self.I10, self.alpha, f, z[i])"
+        command = self.spectrum + "(self.v10, self.I10, self.alpha, f, z[i])"
         for i in range(npts):
             self.Sw[:,i,i] = eval(command)
 
@@ -195,7 +213,13 @@ class GustWindField(object):
         f = np.arange(self.dw, self.wup + self.dw, self.dw) / 2.0 / np.pi
         z = self.points[:,3]
         vz = self.v10 * (z / 10) ** self.alpha
-        
+        for i in range(npts):
+            for j in range(npts):
+                self.coh[:,i,j] = np.exp(-2.0 * f * np.sqrt(
+                                  cx * cx * (x[i] - x[j]) ** 2 +
+                                  cy * cy * (y[i] -y[j]) ** 2 +
+                                  cz * cz * (z[i] - z[j]) ** 2) /
+                                  (vz[i] + vz[j]))
 
     def _cross_spectrum_matrix(self):
         if self.Sw is None or self.coh is None:
@@ -268,39 +292,17 @@ class GustWindField(object):
         plt.close(fig)
 
 
-def foo(x):
-    s = 0
-    for i in range(x):
-        s += i
-    return s
-
-@numba.jit(nopython=True)
-def fast_foo(x):
-    s = 0
-    for i in range(x):
-        s += i
-    return s
-
-
 if __name__ == "__main__":
-    # start = time.time()
-    # config = ConfigData("config.ini")
-    # gust = GustWindField(config)
-    # points = np.zeros((5,4))
-    # for i in range(1,6):
-    #     points[i-1, 3] = i * 10
-    # gust.set_points(points)
-    # gust.generate()
-    # end = time.time()
-    # print("cost: ", end - start)
-    # gust.error()
-
-    x = int(1e8)
     start = time.time()
-    s = foo(x)
-    mid = time.time()
-    print("foo costs: ", mid - start)
-    s = fast_foo(x)
+    config = ConfigData("config.ini")
+    gust = GustWindField(config)
+    points = np.zeros((5,4))
+    for i in range(1,6):
+        points[i-1, 3] = i * 10
+    gust.set_points(points)
+    gust.generate()
     end = time.time()
-    print("fast_foo costs: ", end - mid)
+    print("cost: ", end - start)
+    gust.error()
+
 
