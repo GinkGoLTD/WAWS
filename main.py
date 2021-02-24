@@ -12,6 +12,7 @@ if __name__ == "__main__":
     # gust.generate()
     # gust.error()
 
+    # generate a random signal
     np.random.seed(0)
     n = 1000
     x = np.random.rand(n)
@@ -19,27 +20,25 @@ if __name__ == "__main__":
     dt = t[1] - t[0]
     fs = 1 / dt
 
-    # fft to spectrum
-    sxx = np.fft.fft(x)
-    fx = np.fft.fftfreq(n=t.shape[-1], d=dt)
-    sxx = np.abs(sxx[1:n//2]) ** 2 / n / fs
-    fx = fx[1:n//2]
+    # spectrum to auto-correlation
+    fxx, pxx = scipy.signal.welch(x, fs=fs, window="hann", nperseg=512,
+               scaling="density", return_onesided=True)
+    Rxx = np.fft.ifft(pxx, n=n)
+    Rxx /= np.max(Rxx)
+    # t = np.fft.
+    t1 = np.arange(n) * dt
 
-    # welch
-    fwelch, pwelch = scipy.signal.welch(x, fs=fs, window="hann", nperseg=1024, scaling="density")
+    # auto-correlation 
+    # xcorr = smt.stattools.acf(x, nlags=n-1, fft=False) * x.var()
+    xcorr = np.correlate(x, x, mode="full")
+    xcorr /= np.max(xcorr)
 
-    # correlation 
-    xcorr = smt.stattools.acf(x, nlags=n-1, fft=False)
-    fc = np.fft.fftfreq(n, d=dt)
-    fc = fc[1:n//2]
-    pc = np.fft.fft(xcorr)
-    pc = np.abs(pc)[1:n//2]
-
-    print(fc)
-    fig, ax = plt.subplots()
-    # ax.plot(t, x, c="black")
-    ax.loglog(fx, sxx, c="black", lw=1)
-    ax.loglog(fwelch, pwelch, c="red", lw=1)
-    # ax.loglog(fc, pc / 2.0, c="green", lw=1)
+    fig, axs = plt.subplots(nrows=2, ncols=2)
+    axs = axs.flatten()
+    axs[0].plot(t, x)
+    axs[1].loglog(fxx, pxx, c="red", lw=1)
+    axs[2].plot(t1, Rxx.imag, c="black", lw=1)
+    # axs[2].acorr(x, maxlags=n-20)
+    axs[2].plot(t1, xcorr[len(xcorr)//2:], c="red", lw=1, ls="dashed")
     plt.show()
     plt.close(fig)

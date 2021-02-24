@@ -2,9 +2,11 @@ import os
 import numpy as np
 from scipy import signal
 import matplotlib.pyplot as plt
+from statsmodels.tsa.stattools import acf
 import numba
 import time
 import configparser
+np.seterr(divide="print")
 
 
 ###############################################################################
@@ -164,6 +166,15 @@ def fft_synthesis(Hw, nfreq, m, dw, npts, phi, t):
 
     return vt
 
+def autocorrelation(x,lags):
+    #计算lags阶以内的自相关系数，返回lags个值，分别计算序列均值，标准差
+    n = len(x)
+    x = np.array(x)
+    result = [np.correlate(x[i:]-x[i:].mean(),x[:n-i]-x[:n-i].mean())[0]\
+    	/(x[i:].std()*x[:n-i].std()*(n-i)) \
+    	for i in range(1,lags+1)]
+    return np.array(result)
+
 
 ###############################################################################
 #                           data visualization function                       #
@@ -171,6 +182,7 @@ def fft_synthesis(Hw, nfreq, m, dw, npts, phi, t):
 def plot_time_history(t, x, pid, path=None):
     fig,ax = plt.subplots(figsize=np.array([12,6])/2.54, tight_layout=True)
     ax.plot(t, x, lw=1, c="black")
+    ax.axhline(np.mean(x), c="red", lw=2, ls="dashed")
     ax.set_xlabel("t (s)")
     ax.set_ylabel("wind speed (m/s)")
     ax.grid(True)
@@ -220,8 +232,9 @@ class ConfigData(object):
     def _parse_wind(self):
         wind = self.config["wind"]
         self.v10 = wind.getfloat("reference wind speed (m/s)")
-        self.I10 = wind.getfloat("reference turbulence intensity")
         self.alpha = wind.getfloat("alpha")
+        self.I10 = wind.getfloat("reference turbulence intensity")
+        self.d = wind.getfloat("d")
         self.spectrum_type = wind.get("type of wind spectrum").strip().lower()
         self.coh_type = wind.get("type of coherence function").strip().lower()
         self.cx = wind.getfloat("cx")
@@ -309,6 +322,11 @@ class GustWindField(object):
         # parse the parameters from config object
         # file parameters
         self.workdir = os.path.abspath(config.workdir)
+        # create results file
+        path = os.path.join(self.workdir, "results")
+        if not os.path.exists(path):
+            os.makedirs(path)
+        # load points
         fname = os.path.join(self.workdir, "points.csv")
         if config.is_read_points:
             self.points = np.loadtxt(fname, delimiter=",", skiprows=1)
@@ -320,13 +338,16 @@ class GustWindField(object):
 
         # wind parameters
         self.v10 = config.v10
-        self.I10 = config.I10
         self.alpha = config.alpha
+        self.I10 = config.I10
+        self.d = config.d
         self.spectrum = config.spectrum_type.lower()
         self.coherence = config.coh_type.lower()
         self.cx = config.cx
         self.cy = config.cy
         self.cz = config.cz
+        self.vz = self.v10 * (self.points[:,3] / 10) ** self.alpha
+        self.Iu = self.I10 * (self.points[:,3] / 10) ** (-self.d)
 
         # terrain parameters
         self.k = config.karman_const
@@ -344,6 +365,14 @@ class GustWindField(object):
         self.coh = None
         self.Sw = None
         self.Hw = None
+
+    @staticmethod
+    def wind_profile(z, v10, alpha):
+        return v10 * (z / 10) ** alpha
+
+    @staticmethod
+    def turbulence_intensity(z, c, d):
+        return c * (z / 10) ** (-d)
 
     def _waws_parameters(self):
         """ set wml and t """
@@ -430,11 +459,12 @@ class GustWindField(object):
                 s, e = i * self.N, (i + 1) * self.N
                 self.Hw[:,:,i] = Hw[s:e,:,i]
 
-    def generate(self, method="fft"):
+    def generate(self, mean=True, method="fft"):
         """[summary]
 
         Args:
-            method (str, optional): [description]. Defaults to "direct".
+            mean (bool): Including mean wind speed or not? Defaults to True
+            method (str, optional): ["fft" or "Deodatis"]. Defaults to "direct".
         """
         method = method.lower()
         if method not in ["fft", "deodatis"]:
@@ -461,8 +491,12 @@ class GustWindField(object):
             self.vt = fft_synthesis(self.Hw, self.N, self.M, dw, npts, phi, self.t)
         else:
             raise ValueError("Unrecongnized method: " + method)
+        self.vt -= np.mean(self.vt, axis=0)
+        if mean:
+            self.vt += self.vz
+
         print("finished!")
-    
+
     def save(self):
         # create directory
         path = os.path.join(self.workdir, "results")
@@ -492,18 +526,95 @@ class GustWindField(object):
         head = ["f(Hz)"] + [str(self.points[i,0]) for i in range(npts)]
         np.savetxt(fname, ans, delimiter=",", header=",".join(head))
 
+    def _temporal_corr(self, p1, p2, lags):
+        ind1 = np.where(self.points[:,0]==p1)[0]
+        ind2 = np.where(self.points[:,0]==p2)[0]
+        print(ind1)
+        Rjk = np.zeros(lags)
+        t = np.arange(lags) * self.dt
+        w_t = np.zeros((self.N, t.size))
+        for i in range(self.N):
+            w_t[i,:] = np.cos(self.wml[i] * t.reshape(1,-1))
+        print(w_t)
+        print(w_t.shape)
+        Hw2 = np.zeros((self.N,1))
+        for i in range(npts):
+            Hw2 += np.abs(self.Hw[:self.N,ind1,i] * 
+                   self.Hw[:self.N,ind2,i])
+        
+        for i in range(lags):
+            tmp = np.sum(Hw2 * w_t[:,i].reshape(-1,1), axis=0) * self.dw * 2
+            Rjk[i] = tmp
+
+        # print(Rjk)
+        # print(Rjk.shape)
+        return t, Rjk
+
+    def stats(self, save=True):
+        # check wind profile
+        z = np.arange(0, np.max(self.points[:,3])+1, 1)
+        vz = self.v10 * (z / 10) ** self.alpha
+        z_ = self.points[:,3].reshape(-1,1)
+        vz_ = np.mean(self.vt, axis=0).reshape(-1,1)
+        # plot
+        fig, ax = plt.subplots(figsize=np.array([8,7])/2.54, tight_layout=True)
+        ax.plot(vz, z, c="black", lw=1, label="target")
+        ax.scatter(vz_, z_,  c="red", s=20, marker="o", label="simulated",
+                   zorder=2.5)
+        ax.grid(True)
+        ax.legend()
+        ax.set_xlabel("V (m/s)")
+        ax.set_ylabel("z (m)")
+        if not save:
+            plt.pause(5)
+        else:
+            figname = os.path.join(self.workdir, "results", "mean.svg")
+            plt.savefig(figname, dpi=300)
+        plt.close(fig)
+
+        # check turbulence intensity
+        z = np.arange(0, np.max(self.points[:,3]), 1)
+        Iz = GustWindField.turbulence_intensity(z, self.I10, self.d)
+        Iz_ = np.std(self.vt, axis=0) / self.vz
+        Iz_ = Iz_.reshape(-1,1)
+
+        fig, ax = plt.subplots(figsize=np.array([8,7])/2.54, tight_layout=True)
+        ax.plot(Iz, z, c="black", lw=1, label="target")
+        ax.scatter(Iz_, z_, c="red", s=20, marker="o", label="simulated", 
+                   zorder=2.5)
+        ax.grid(True)
+        ax.legend(loc="best")
+        ax.set_xlabel("Iu")
+        ax.set_ylabel("z (m)")
+        if not save:
+            plt.pause(5)
+        else:
+            figname = os.path.join(self.workdir, "results", "turbulence.svg")
+            plt.savefig(figname, dpi=300)
+        plt.close(fig)
+
+        # save all the data
+        # save wind profile
+        data = np.hstack((z_, vz_, Iz_))
+        fname = os.path.join(self.workdir, "results", "vz_Iu.csv")
+        np.savetxt(fname, data, delimiter=",", header="z(m), vz(m/s), Iu")
+
     def error(self):
         # create directory
         path = os.path.join(self.workdir, "results")
         if not os.path.exists(path):
             os.makedirs(path)
 
-        # basic compare: spectrum compare
+        # basic compare, mean wind speed and turbulence intensity
+        self.stats()
+
+        # spectrum compare
         for pid in self.target_PIDs:
             # check pid exists?
             ind = np.where(self.points[:,0]==pid)[0]
             if (ind.size == 0):
                 raise Warning("Unvalid points ID: ", pid)
+
             # plot time_history
             plot_time_history(self.t, self.vt[:,ind], pid, path)
 
@@ -516,6 +627,56 @@ class GustWindField(object):
             # S(w) = S(f) / 2 / np.pi
             plot_spectrum(freq, 2.0*np.pi*self.target_Sw[:,ind,ind], self.t,
                  self.vt[:,ind], pid, path)
+            
+            # auto-correlation analysis
+            # R0 = np.fft.ifft(self.target_Sw[:,ind, ind], n=self.M, axis=0) / 2 / np.pi
+            # t1, R_jk = self._temporal_corr(pid, pid, 1000)
+            # # Rt = acf(self.vt[:,ind], nlags=self.M, fft=False)
+            # n = 2000
+            # Rt = np.zeros(n)
+            # n = self.M
+            # Rt = signal.correlate(self.vt[:,ind].flatten(), self.vt[:,ind].flatten(), "same", method="fft")
+            # print(self.vt.shape)
+            # Rt /= self.M
+            # print(Rt.shape)
+            # lags = 2000
+            # Rt1 = autocorrelation(self.vt[:,ind].flatten(), lags)
+            # print(Rt1.shape)
+
+            # print(np.sum(self.vt[:,ind] * self.vt[:,ind]) / self.M)
+
+
+        #     fig, ax = plt.subplots()
+        #     t = np.arange(len(R0)) * self.dt
+        #     ax.plot(t, R0.real, c='black', lw=1)
+        #     ax.plot(t, R0.imag, c='red', lw=1, ls="dashed")
+        #     # ax.plot(np.arange(len(Rt)//2) * self.dt, Rt[len(Rt)//2:], c="green", lw=1, ls="dashed")
+        #     # ax.plot(np.arange(lags) * self.dt, Rt1, c="blue", lw=2)
+        #     # ax.plot(t1, R_jk, c="green")
+        #     plt.show()
+        #     plt.close(fig)
+
+        # # cross-correlation analysis
+        # n = len(self.target_PIDs)
+        # for i in range(1,n):
+        #     for j in range(i):
+        #         # if i == j: continue
+        #         ind1 = np.where(self.points[:,0]==self.target_PIDs[i])[0]
+        #         ind2 = np.where(self.points[:,0]==self.target_PIDs[j])[0]
+        #         R0_jk = np.fft.ifft(self.Sw[:self.N,ind1,ind2] / 2 / np.pi, axis=0)
+        #         print(R0_jk.shape)
+        #         t = np.arange(len(R0_jk)) * self.dt
+
+        #         R_jk = signal.correlate(self.vt[:,ind1].flatten(), self.vt[:,ind2].flatten(), "same") / self.M
+
+        #         fig, ax = plt.subplots()
+        #         ax.plot(t, R0_jk.real, c="black", lw=1)
+        #         ax.plot(t, R0_jk.imag, c="red", lw=1)
+        #         # ax.plot(np.arange(len(R_jk)//2) * self.dt, R_jk[len(R_jk)//2:])
+        #         plt.show()
+        #         plt.close(fig)
+
+        # coherence analysis
 
 
 
@@ -530,7 +691,8 @@ if __name__ == "__main__":
         points[i-1, 3] = i * 10
     gust1 = GustWindField(config, points)
     # gust2 = GustWindField(config, points)
-    gust1.generate(method="fft")
+    gust1.generate(mean=True, method="fft")
+    # gust1.generate(mean=False, method="deodatis")
     start = time.time()
     # gust2.generate(method="deodatis")
     gust1.save()
