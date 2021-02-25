@@ -337,7 +337,7 @@ $$
 P(\omega) = \lim\limits_{T\to\infin} \frac{|F(\omega)|^2}{2\pi T} \\
 P(f) = \lim\limits_{T\to\infin} \frac{|F(f)|^2}{T}
 $$
-注意: $P(\omega)$与$P(f)$并不相等
+注意: $P(\omega)​$与$P(f)​$并不相等
 $$
 P = \int_{-\infin}^{\infin}P(\omega)d\omega = \int_{-\infin}^{\infin} P(f)df\\
 P(f) = 2\pi P(\omega)
@@ -354,16 +354,31 @@ P(\omega) = \frac{1}{2\pi} \int Rxx(\tau) e^{-j\omega \tau} d\tau \\
 P(f) =\int Rxx(\tau) e^{-j2\pi f\tau} d\tau \\
 P(f) = 2\pi P(\omega)
 $$
+也即是说$P(f)$与$P(\omega)$不是同一个函数, 为了方面理解可以改写为$P_f(f)$和$P_{\omega}(f)$. 同理, 对于风速谱$S(f)$与$S(\omega)$也存在相同的关系. 实际工程中通常将风速谱表示为物理频率$f$的函数, 如Davenport谱
+$$
+\frac{f S_f(f)} {\sigma_u^2} = \frac{2x^2}{3(1 + x^2)^{\frac{4}{3}}}\\
+x = \frac{fL_u}{\bar{v}}\\
+L = 1200 m
+$$
+上式中, 可以用$\omega=2\pi f$进行替换得到$S_f(\omega)$, 但需要注意得到的函数$S_f(\omega)$并不等于$S_{\omega}(\omega)$, 二者还存在一个$2\pi$的系数, 两者之间的真实关系如下
+$$
+S_f(f)=S_f(\omega) = 2\pi S_{\omega}(\omega)
+$$
+
+
 #### 2.2.3 单边谱与双边谱
+
 现实世界不存在负频率
 $$
 P_{oneside}(\omega) = 2P_{twoside}(\omega)
 $$
 
 #### 2.2.4 程序中关于风谱的使用说明
-1. 考虑到上述谐波合成法理论中, 风谱均表示为角频率$\omega$的函数, 因此输入的目标功率谱也均采用$S_v(\omega)$, 在使用自编的风谱函数时,请务必注意
-2. 为了减少计算量, 按照风谱函数计算的目标将存储在`target`属性中, 对比生成信号功率谱和目标功率谱一致性时, 将直接调用这个数据
-3. 生成信号的功率谱采用welch方法计算(`scipy.singal.welch`), 得到的结果是$S_v(f)$; 因此将`target`中存储的数据转换后进行对比, 具体方法为: 横坐标$f=\omega/(2\pi)$, 纵坐标: $S_v(f) = target * 2  \pi$; (具体原理见2.2节)
+1. 风工程中的风谱多表示成物理频率$f$的函数, 因此本程序编写的风谱函数均为$S_f(f)$, 在使用自编的风谱函数时,请务必注意
+2. 风谱函数$S_f(f)$为单边谱, 而在生成互谱密度矩阵时采用的是双边谱, 因此需要$S_f(f)/2$
+3. 考虑到上述谐波合成法理论中, 风谱均表示为角频率$\omega$的函数, 因此在`GustWindField class`中将输入的目标功率谱$S_f(f)$转换为$S_{\omega}(\omega)$
+4. 为了减少计算量, 按照风谱函数计算的目标将存储在`target`属性中, 对比生成信号功率谱和目标功率谱一致性时, 将直接调用这个数据
+5. 生成信号的功率谱采用welch方法计算(`scipy.singal.welch`), 得到的结果是$S_v(f)$; 因此将`target`中存储的数据转换后进行对比, 具体方法为: 横坐标$f=\omega/(2\pi)$, 纵坐标: $S_v(f) = target * 2  \pi$; (具体原理见2.2节)
 
 
 ### 2.3 WAWS合成法的加速
@@ -477,11 +492,11 @@ $$
 
 $$
 \frac{n S_u(n)} {\sigma_u^2} = \frac{2x^2}{3(1 + x^2)^{\frac{4}{3}}}\\
-x = \frac{nL_u}{\bar{v}}\\
+x = \frac{nL_u}{\bar{v}_{10}}\\
 L = 1200 m
 $$
 
-Davenport谱假定湍流积分尺度$L$不随高度改变, 取为1200m, 中国规范采用Davenport谱.
+Davenport谱假定湍流积分尺度$L​$不随高度改变, 取为1200m, 中国规范采用Davenport谱.
 
 2. Kaimal谱
 
@@ -493,12 +508,21 @@ a_1 = 6.868, a_2 = 10.302
 $$
 美国规范采用该谱, 欧洲规范也采用该谱
 
+| 地形       | A        | B        | C        | D        |
+| ---------- | -------- | -------- | -------- | -------- |
+| $l (ft)$   | 54.864   | 97.536   | 152.400  | 198.120  |
+| $\epsilon$ | 1/0.6096 | 1/0.9144 | 1/1.5240 | 1/2.4384 |
+
+注：美国规范中地形类别的 A、 B、 C、 D，分别对应着我国规范中的 D、 C、 B、 A 类别
+
+
+
 3. Von Karman谱
 
 $$
 \frac{n S_u(n)} {\sigma_u^2} = \frac{4x}{(1 + 70.8 x^2)^{\frac{5}{6}}}\\
 x = \frac{nL_u}{\bar{v}}\\
-l_u = L_H = 100 (\frac{H}{30})^{0.5}
+L_u = L_H = 100 (\frac{H}{30})^{0.5}
 $$
 
 日本规范采用该谱

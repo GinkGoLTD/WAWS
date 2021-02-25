@@ -1,121 +1,120 @@
 import os
+import time
+import configparser
 import numpy as np
 from scipy import signal
 import matplotlib.pyplot as plt
 from statsmodels.tsa.stattools import acf
 import numba
-import time
-import configparser
 np.seterr(divide="print")
 
 
 ###############################################################################
 #                              Spectra Function                               #
 ###############################################################################
-@numba.jit(nopython=True)
-# def harris(v10, I10, alpha, f, z):
-def harris(v10, I10, alpha, w, z, omega=True):
-    """ <风荷载规范中若干问题的研究> 夏瑞光
-    adopted in Austrilia code
-            s(n) = 4 * sigma**2 * x / 6.677 / n / (2 + x**2)**(5/6)
-    where, sigma is the turbulence intesisty, RETHINK: at 10m height or not?
-           x = 1800 * n / v10;
-           x = n * Lu / vz (Austrilia code), Lu = 1000 * (z / 10)**0.25;
+def davenport(f, sigma2, **kwargs):
+    """ one-side Davenport spectrum, Davenport 1961, adopted in Chinese code
 
     Args:
-        v10 ([type]): [description]
-        I10 ([type]): [description]
-        alpha ([type]): [description]
-        f ([type]): [description]
-        z ([type]): [description]
+        f (1d-ndarray): freqency, unit: Hz
+        sigma2 (float): variance, (Iu * vz) ** 2
+
+        **kwargs: spectrum propeteries
+        Lu (float): integral scale, unit:m
+        v10 (float): mean wind speed at 10m height, unit: m/s
 
     Returns:
-        [type]: [description]
+        1d-ndarray: specturm value
     """
-    # WARNING: check it again
-    # vz = v10 * (z / 10) ** alpha
-    # w = 2 * np.pi * f
-    u_ = I10 * v10 / np.sqrt(6.677) #WARNING: check it again
-    if omega:
-        x = w * 1800 / v10 / 2 / np.pi
-        ret = 4 * (u_ * u_) * x / ((2 + x * x) ** (5.0 / 6)) / w / 2.0 * 2.0 * np.pi
+    if "Lu" in kwargs:
+        Lu = kwargs["Lu"]
     else:
-        x = w * 1800 / v10
-        ret = 4 * (u_ * u_) * x / ((2 + x * x) ** (5.0 / 6)) / w / 2.0
+        Lu = 1200.0
+    v10 = kwargs["v10"]
+    x = f * Lu / v10
+    ret = sigma2 * 2.0 * x * x / ((1 + x * x) ** (4.0 / 3.0)) / f / 3.0
     return ret
 
-@numba.jit(nopython=True)
-def davenport(v10, I10, alpha, f, z):
-    """ <风荷载规范中若干问题的研究> 夏瑞光
-    Davenport 1961, adopted in Chinese code
-            S(n) = 4 * k * v10**2 * x**2 / n / (1 + x**2)**(4/3)
-    where, k is the ground roughness coefficient, ;
-           x = 1200 * n / v10;
-           v10 is the mean wind speed at 10m height
+def karman(f, sigma2, **kwargs):
+    """ one-side Von Karman spectrum 
+    
+    Args:
+        f (1d-ndarray): freqency, unit: Hz
+        sigma2 (float): variance, (Iu * vz) ** 2
+
+        **kwargs: spectrum propeteries
+        z (float): height, unit:m
+        vz (float): mean wind speed at z height, unit: m/s
+    """
+
+
+    vz = kwargs["vz"]
+    z = kwargs["z"]
+    Lu = 100 * (z / 30) ** 0.5
+    x = f * Lu / vz
+    ret = sigma2 / f * 4.0 * x / ((1 + 70.8 * x * x) ** (5.0 / 6))
+    return ret
+
+
+def harris(f, sigma2, **kwargs):
+    """ one-side Harris spectra, adopted in Austrilia code
 
     Args:
-        v10 ([type]): [description]
-        I10 ([type]): [description]
-        alpha ([type]): [description]
-        f ([type]): [description]
-        z ([type]): [description]
+        f (1d-ndarray): freqency, unit: Hz
+        sigma2 (float): variance, (Iu * vz) ** 2
 
-    Returns:
-        [type]: [description]
+        **kwargs: spectrum propeteries
+        v10 (float): mean wind speed at 10m height, unit: m/s
     """
-    # WARNING: check it again
-    vz = v10 * (z / 10.0) ** alpha
-    k = I10 * I10 / 6.0
-    x = f * 1200 / v10
-    ret = 4.0 * k * v10 * v10 * x * x / ((1 + x * x) ** (4.0 / 3.0)) / f / 2.0
+    v10 = kwargs["v10"]
+    x = f * 1800 / v10
+    ret = sigma2 / f * 0.6 * x / ((2 + x * x) ** (5.0 / 6))
     return ret
 
-@numba.jit(nopython=True)
-def simiu(v10, I10, alpha, f, z):
-    vz = v10 * (z / 10.0) ** alpha
-    u_ = I10 * v10 / np.sqrt(6)
+def simiu(f, sigma2, **kwargs):
+    """ one-side Simiu spectra
+
+    Args:
+        f (1d-ndarray): freqency, unit: Hz
+        sigma2 (float): variance, (Iu * vz) ** 2
+
+        **kwargs: spectrum propeteries
+        z (float): height, unit:m
+        vz (float): mean wind speed at z height, unit: m/s
+    """
+    z = kwargs["z"]
+    vz = kwargs["vz"]
     x = f * z / vz
-    ret = np.zeros_like(f)
+    ret = np.zeros_like(f, dtype=np.float64)
     for k in range(len(f)):
         if x[k] > 0.2:
-            ret[k] = 0.26 * u_ ** 2 / x[k] ** (2 / 3) / f[k] / 2
+            ret[k] = sigma2 / f[k] * 0.0433 / x[k] ** (2.0 / 3)
         else:
-            ret[k] = 200 * x[k] * u_ ** 2 / f[k] / ((1 + 50 * x[k]) ** (5 / 3.0)) / 2.0
+            ret[k] = (sigma2 / f[k] * 100.0 * x[k] 
+                      / 3.0 / ((1 + 50.0 * x[k]) ** (5 / 3.0)))
     return ret
 
-@numba.jit(nopython=True)
-def kaimal(v10, I10, alpha, f, z):
-    """ <风荷载规范中若干问题的研究> 夏瑞光
-    the expression:
-            S(z, n) = 100 * x * sigma**2 / 3 / n / (1 + 50x)**(5/3)
-    where, sigma is the turbulence intesisty, RETHINK: at 10m height or not?
-           x = n * z / vz, vz is the mean wind speed at z height
-
-    adopted in Europe code:
-            S(z, n) = 6.8 * x * sigma**2 / n / (1 + 10.2x)**(5/3)
-    where, x = n * Lu / vz, Lu = 300 * (z / 200) ** (0.67 + 0.05 * ln(z0)),
-           z0 is the ground roughness length, taken from the follow table
-           | terrain |  0  |  I  |  II  |  III  |  IV  |
-           |  z0(m)  |0.003| 0.01| 0.05 |  0.3  |  1.0 |
+def kaimal(f, sigma2, **kwargs):
+    """ one-side Kaimal spectra, adopted in Amercian code ASCE7
 
     Args:
-        v10 ([type]): [description]
-        I10 ([type]): [description]
-        alpha ([type]): [description]
-        f ([type]): [description]
-        z ([type]): [description]
+        f (1d-ndarray): freqency, unit: Hz
+        sigma2 (float): variance, (Iu * vz) ** 2
 
-    Returns:
-        [type]: [description]
+        **kwargs: spectrum propeteries
+        z (float): height, unit:m
+        vz (float): mean wind speed at z height, unit: m/s
+        l (float)
+        epsilon (float)
     """
-    vz = v10 * (z / 10.0) ** alpha
-    # x = f * z / vz
-    Lu = 300 * (z / 200.0) ** (0.67 + 0.05 * np.log10(0.01))
-    x = f * Lu / vz
-    sigma = I10 # RETHINK: at 10m height or not?
-    # k = 0.00129
-    k = I10 * I10 / 6.0
-    ret = 6.8 * x * k * (v10 ** 2) / f / ((1 + 10.2 * x) ** (5.0 / 3))
+    vz = kwargs["vz"]
+    z = kwargs["z"]
+    l = kwargs["l"]
+    epsilon = kwargs["epsilon"]
+
+    Lu = l * (z / 10) ** epsilon
+    x = f * Lu / vz 
+    ret = sigma2 / f * 6.868 * x / ((1 + 10.302 * x) ** (5.0 / 3))
     return ret
 
 
@@ -133,7 +132,7 @@ def cross_spectrum(Sw, coh):
 @numba.jit(nopython=True)
 def synthesis(Hw, nfreq, m, dw, npts, phi, t):
     # npts = Hw.shape[-1]
-    vt = np.zeros((m, npts))
+    vt = np.zeros((m, npts), dtype=np.float64)
     for i in range(npts):
         for j in range(nfreq):
             for k in range(i+1):
@@ -143,7 +142,7 @@ def synthesis(Hw, nfreq, m, dw, npts, phi, t):
     return vt
 
 def fft_synthesis(Hw, nfreq, m, dw, npts, phi, t):
-    vt = np.zeros((m, npts))
+    vt = np.zeros((m, npts), dtype=np.float64)
     B = np.zeros((nfreq, npts, npts), dtype=complex)
     phi_ml = np.zeros((nfreq, npts, npts), dtype=complex)
 
@@ -166,22 +165,13 @@ def fft_synthesis(Hw, nfreq, m, dw, npts, phi, t):
 
     return vt
 
-def autocorrelation(x,lags):
-    #计算lags阶以内的自相关系数，返回lags个值，分别计算序列均值，标准差
-    n = len(x)
-    x = np.array(x)
-    result = [np.correlate(x[i:]-x[i:].mean(),x[:n-i]-x[:n-i].mean())[0]\
-    	/(x[i:].std()*x[:n-i].std()*(n-i)) \
-    	for i in range(1,lags+1)]
-    return np.array(result)
-
 
 ###############################################################################
 #                           data visualization function                       #
 ###############################################################################
 def plot_time_history(t, x, pid, path=None):
     fig,ax = plt.subplots(figsize=np.array([12,6])/2.54, tight_layout=True)
-    ax.plot(t, x, lw=1, c="black")
+    ax.plot(t, x, lw=0.5, c="black")
     ax.axhline(np.mean(x), c="red", lw=2, ls="dashed")
     ax.set_xlabel("t (s)")
     ax.set_ylabel("wind speed (m/s)")
@@ -190,7 +180,8 @@ def plot_time_history(t, x, pid, path=None):
     if path is None:
         plt.pause(5)
     else:
-        figname = os.path.join(path, "wind_speed_of_point_" + str(pid) + ".svg")
+        figname = os.path.join(path, 
+                  "wind_speed_of_point_" + str(pid) + ".svg")
         plt.savefig(figname, dpi=300)
     plt.close(fig)
     
@@ -204,18 +195,47 @@ def plot_spectrum(f, sf, t, x, pid=None, path=None):
     ind = np.where(fxx < f[-1])
     fxx = fxx[ind][1:]
     pxx = pxx[ind][1:]
-    
+
     fig, ax = plt.subplots(figsize=np.array([8,6])/2.54, tight_layout=True)
-    ax.loglog(fxx, pxx, c="Black", lw=0.8, label="simulated")
+    ax.loglog(fxx, pxx, c="black", lw=0.5, label="simulated")
     ax.loglog(f, sf, c="red", lw=2, label="target")
     ax.set_xlabel("f (Hz)")
-    ax.set_ylabel("S(f) (m^2/s)")
+    ax.set_ylabel(r"$S(f) (m^2/s)$")
     ax.legend()
     ax.grid(True)
     if path is None:
         plt.pause(5)
     else:
         figname = os.path.join(path, "spectrum_of_point_" + str(pid) + ".svg")
+        plt.savefig(figname, dpi=300)
+    plt.close(fig)
+
+def plot_coherence(f, cxy, f_, cxy_, figname=None):
+    fig, ax = plt.subplots(figsize=np.array([8,7])/2.54, tight_layout=True)
+    ax.semilogx(f_, cxy_, c="black", lw=1, label="simulated")
+    ax.semilogx(f, cxy, c="red", lw=2, label="target")
+    ax.grid(True)
+    ax.set_xlabel("f (Hz)", fontsize=12, fontstyle="italic")
+    ax.set_ylabel("coherence function", fontsize=12)
+    plt.legend()
+    if figname is None:
+        plt.pause(5)
+    else:
+        plt.savefig(figname, dpi=300)
+    plt.close(fig)
+
+def plot_stats(Xz, z, Xz_, z_, ylabel,figname=None):
+    fig, ax = plt.subplots(figsize=np.array([8,7])/2.54, tight_layout=True)
+    ax.plot(Xz, z, c="red", lw=2, label="target")
+    ax.scatter(Xz_, z_, c="black", s=20, marker="o", label="simulated", 
+               zorder=2.5)
+    ax.grid(True)
+    ax.legend(loc="best")
+    ax.set_xlabel(ylabel)
+    ax.set_ylabel("z (m)")
+    if figname is None:
+        plt.pause(5)
+    else:
         plt.savefig(figname, dpi=300)
     plt.close(fig)
 
@@ -236,6 +256,11 @@ class ConfigData(object):
         self.I10 = wind.getfloat("reference turbulence intensity")
         self.d = wind.getfloat("d")
         self.spectrum_type = wind.get("type of wind spectrum").strip().lower()
+        if self.spectrum_type.lower() == "kaimal":
+            self.l = wind.getfloat("l (m)")
+            self.epsilon = wind.getfloat("epsilon")
+        else:
+            self.l, self.epsilon = None, None
         self.coh_type = wind.get("type of coherence function").strip().lower()
         self.cx = wind.getfloat("cx")
         self.cy = wind.getfloat("cy")
@@ -259,7 +284,8 @@ class ConfigData(object):
             raise ValueError("unit of frequency (Hz/Pi)?")
         self.num_freq = waws.getint("number of segments of frequency")
         self.num_time = waws.getint("number of segments of time")
-        self.double_index = waws.getboolean("double indexing frequency (yes/no)")
+        self.double_index = waws.getboolean(
+            "double indexing frequency (yes/no)")
 
     def _parse_file(self):
         files = self.config["file"]
@@ -342,6 +368,7 @@ class GustWindField(object):
         self.I10 = config.I10
         self.d = config.d
         self.spectrum = config.spectrum_type.lower()
+        self.l, self.epsilon = config.l, config.epsilon
         self.coherence = config.coh_type.lower()
         self.cx = config.cx
         self.cy = config.cy
@@ -398,17 +425,18 @@ class GustWindField(object):
         if (self.T > 2.0 * np.pi / self.dw):
             raise Warning("T > T0! Please increase N!")
 
-    def _spectrum(self):
+    def _spectrum(self, func):
         if self.points is None:
             raise UnboundLocalError("Does not exsit simulated points!")
         npts = len(self.points)
-        self.Sw = np.zeros((len(self.wml), npts, npts))
+        self.Sw = np.zeros((len(self.wml), npts, npts), dtype=np.float64)
 
-        z = self.points[:,3]
-        vz = self.v10 * (z / 10) ** self.alpha
-        command = self.spectrum + "(self.v10, self.I10, self.alpha, self.wml, z[i])"
         for i in range(npts):
-            self.Sw[:,i,i] = eval(command)
+            sigma2 = (self.Iu[i] * self.vz[i]) ** 2
+            kwargs = {"v10": self.v10, "vz": self.vz[i], "z": self.points[i,3],
+                      "l": self.l, "epsilon": self.epsilon}
+            self.Sw[:,i,i] = (func(self.wml / 2.0 / np.pi, sigma2, **kwargs) 
+                              / 2.0 / np.pi / 2.0)
 
         if not self.double_index:
             self.target_Sw = self.Sw   # single indexing frequency
@@ -417,22 +445,19 @@ class GustWindField(object):
 
     def _coherence(self):
         npts = len(self.points)
-        self.coh = np.zeros((len(self.wml), npts, npts))
+        self.coh = np.zeros((len(self.wml), npts, npts), dtype=np.float64)
         x = self.points[:,1]
         y = self.points[:,2]
         z = self.points[:,3]
         cx, cy, cz = self.cx, self.cy, self.cz
-        z = self.points[:,3]
-        vz = self.v10 * (z / 10) ** self.alpha
 
-        # FIXME: change to circle frequency
         for i in range(npts):
             for j in range(npts):
-                self.coh[:,i,j] = np.exp(-2.0 * self.wml / 2 / np.pi * np.sqrt(
-                                  cx * cx * (x[i] - x[j]) ** 2 +
-                                  cy * cy * (y[i] - y[j]) ** 2 +
-                                  cz * cz * (z[i] - z[j]) ** 2) /
-                                  (vz[i] + vz[j]))
+                self.coh[:,i,j] = np.exp(-2.0 * self.wml / 2 / np.pi * 
+                                  np.sqrt(cx * cx * (x[i] - x[j]) ** 2 +
+                                          cy * cy * (y[i] - y[j]) ** 2 +
+                                          cz * cz * (z[i] - z[j]) ** 2) /
+                                  (self.vz[i] + self.vz[j]))
 
     def _cross_spectrum_matrix(self):
         if self.Sw is None or self.coh is None:
@@ -447,7 +472,7 @@ class GustWindField(object):
         if self.Sw is None:
             raise UnboundLocalError("Does not generate spectrum martix!")
         npts = len(self.points)
-        Hw = np.zeros_like(self.Sw)
+        Hw = np.zeros_like(self.Sw,)
         for i in range(len(self.wml)):
             Hw[i,:,:] = np.linalg.cholesky(self.Sw[i,:,:])
 
@@ -460,8 +485,7 @@ class GustWindField(object):
                 self.Hw[:,:,i] = Hw[s:e,:,i]
 
     def generate(self, mean=True, method="fft"):
-        """[summary]
-
+        """
         Args:
             mean (bool): Including mean wind speed or not? Defaults to True
             method (str, optional): ["fft" or "Deodatis"]. Defaults to "direct".
@@ -471,14 +495,14 @@ class GustWindField(object):
             raise ValueError("unrecongnized method! fft or deodatis?")
 
         print("generate cross spectrum matrix...")
-        self._spectrum()
+        self._spectrum(eval(self.spectrum))
         self._coherence()
         self._cross_spectrum_matrix()
 
         print("cholesky decompostion...")
         self._cholesky()
         npts = len(self.points)
-        self.vt = np.zeros((self.M, npts))
+        self.vt = np.zeros((self.M, npts), dtype=np.float64)
 
         print("synthesis gust wind speed...")
         np.random.seed(0)
@@ -487,8 +511,8 @@ class GustWindField(object):
         if method == "deodatis":
             self.vt = synthesis(self.Hw, self.N, self.M, dw, npts, phi, self.t)
         elif method == "fft":
-            # TODO:
-            self.vt = fft_synthesis(self.Hw, self.N, self.M, dw, npts, phi, self.t)
+            self.vt = fft_synthesis(self.Hw, self.N, self.M, dw, npts, phi,
+                                    self.t)
         else:
             raise ValueError("Unrecongnized method: " + method)
         self.vt -= np.mean(self.vt, axis=0)
@@ -506,14 +530,13 @@ class GustWindField(object):
         # save wind speed
         fname = os.path.join(path, "wind_speed.csv")
         ans = np.hstack((self.t.reshape(-1,1), self.vt))
-        print(self.points)
         head = ["t"] + [str(self.points[i,0]) for i in range(len(self.points))]
         np.savetxt(fname, ans, delimiter=",", header=",".join(head))
 
         # save traget spectrums
         fname = os.path.join(path, "target_spectrum.csv")
         npts = len(self.points)
-        target = np.zeros((self.N, npts))
+        target = np.zeros((self.N, npts), dtype=np.float64)
         for i in range(npts):
             for j in range(npts):
                 target[:,i] = self.target_Sw[:,i,j] * 2.0 * np.pi
@@ -525,6 +548,47 @@ class GustWindField(object):
         ans = np.hstack((freq.reshape(-1,1), target))
         head = ["f(Hz)"] + [str(self.points[i,0]) for i in range(npts)]
         np.savetxt(fname, ans, delimiter=",", header=",".join(head))
+
+    def stats_test(self, save=True):
+        # check wind profile
+        z = np.arange(0, np.max(self.points[:,3])+1, 1)
+        vz = self.v10 * (z / 10) ** self.alpha
+        z_ = self.points[:,3].reshape(-1,1)
+        vz_ = np.mean(self.vt, axis=0).reshape(-1,1)
+        # plot
+        figname = os.path.join(self.workdir, "results", "mean.svg")
+        plot_stats(vz, z, vz_, z_, "V (m/s)", figname)
+
+        # check turbulence intensity
+        z = np.arange(0, np.max(self.points[:,3]), 1)
+        Iz = GustWindField.turbulence_intensity(z, self.I10, self.d)
+        Iz_ = np.std(self.vt, axis=0) / self.vz
+        Iz_ = Iz_.reshape(-1,1)
+        # plot
+        figname = os.path.join(self.workdir, "results", "turbulence.svg")
+        plot_stats(Iz, z, Iz_, z_, "Iu (m/s)", figname)
+
+        # save all the data
+        data = np.hstack((z_, vz_, Iz_))
+        fname = os.path.join(self.workdir, "results", "vz_Iu.csv")
+        np.savetxt(fname, data, delimiter=",", header="z(m), vz(m/s), Iu")
+
+    def coherence_test(self):
+        f = self.wml[1:self.N] / 2.0 / np.pi
+        n = len(self.target_PIDs)
+        for i in range(n):
+            for j in range(i):
+                p1, p2 = self.target_PIDs[i], self.target_PIDs[j]
+                ind1 = np.where(self.points[:,0]==p1)[0]
+                ind2 = np.where(self.points[:,0]==p2)[0]
+                cxy = self.coh[1:self.N,ind1,ind2]
+                f_, cxy_ = signal.coherence(self.vt[:,ind1].flatten(), 
+                                self.vt[:,ind2].flatten(), fs=1.0/self.dt,
+                                window="hann",nperseg=self.N/4)
+                figname = os.path.join(self.workdir, "results", 
+                            "coh_p" + str(p1) + "_p" + str(p2) + ".svg")
+                plot_coherence(f, cxy, f_, cxy_, figname)
+
 
     def _temporal_corr(self, p1, p2, lags):
         ind1 = np.where(self.points[:,0]==p1)[0]
@@ -541,63 +605,14 @@ class GustWindField(object):
         for i in range(npts):
             Hw2 += np.abs(self.Hw[:self.N,ind1,i] * 
                    self.Hw[:self.N,ind2,i])
-        
+
         for i in range(lags):
             tmp = np.sum(Hw2 * w_t[:,i].reshape(-1,1), axis=0) * self.dw * 2
             Rjk[i] = tmp
-
-        # print(Rjk)
-        # print(Rjk.shape)
         return t, Rjk
 
-    def stats(self, save=True):
-        # check wind profile
-        z = np.arange(0, np.max(self.points[:,3])+1, 1)
-        vz = self.v10 * (z / 10) ** self.alpha
-        z_ = self.points[:,3].reshape(-1,1)
-        vz_ = np.mean(self.vt, axis=0).reshape(-1,1)
-        # plot
-        fig, ax = plt.subplots(figsize=np.array([8,7])/2.54, tight_layout=True)
-        ax.plot(vz, z, c="black", lw=1, label="target")
-        ax.scatter(vz_, z_,  c="red", s=20, marker="o", label="simulated",
-                   zorder=2.5)
-        ax.grid(True)
-        ax.legend()
-        ax.set_xlabel("V (m/s)")
-        ax.set_ylabel("z (m)")
-        if not save:
-            plt.pause(5)
-        else:
-            figname = os.path.join(self.workdir, "results", "mean.svg")
-            plt.savefig(figname, dpi=300)
-        plt.close(fig)
-
-        # check turbulence intensity
-        z = np.arange(0, np.max(self.points[:,3]), 1)
-        Iz = GustWindField.turbulence_intensity(z, self.I10, self.d)
-        Iz_ = np.std(self.vt, axis=0) / self.vz
-        Iz_ = Iz_.reshape(-1,1)
-
-        fig, ax = plt.subplots(figsize=np.array([8,7])/2.54, tight_layout=True)
-        ax.plot(Iz, z, c="black", lw=1, label="target")
-        ax.scatter(Iz_, z_, c="red", s=20, marker="o", label="simulated", 
-                   zorder=2.5)
-        ax.grid(True)
-        ax.legend(loc="best")
-        ax.set_xlabel("Iu")
-        ax.set_ylabel("z (m)")
-        if not save:
-            plt.pause(5)
-        else:
-            figname = os.path.join(self.workdir, "results", "turbulence.svg")
-            plt.savefig(figname, dpi=300)
-        plt.close(fig)
-
-        # save all the data
-        # save wind profile
-        data = np.hstack((z_, vz_, Iz_))
-        fname = os.path.join(self.workdir, "results", "vz_Iu.csv")
-        np.savetxt(fname, data, delimiter=",", header="z(m), vz(m/s), Iu")
+    def ergodicity_test(self):
+        pass
 
     def error(self):
         # create directory
@@ -606,7 +621,7 @@ class GustWindField(object):
             os.makedirs(path)
 
         # basic compare, mean wind speed and turbulence intensity
-        self.stats()
+        # self.stats_test()
 
         # spectrum compare
         for pid in self.target_PIDs:
@@ -614,7 +629,7 @@ class GustWindField(object):
             ind = np.where(self.points[:,0]==pid)[0]
             if (ind.size == 0):
                 raise Warning("Unvalid points ID: ", pid)
-
+            '''
             # plot time_history
             plot_time_history(self.t, self.vt[:,ind], pid, path)
 
@@ -627,34 +642,34 @@ class GustWindField(object):
             # S(w) = S(f) / 2 / np.pi
             plot_spectrum(freq, 2.0*np.pi*self.target_Sw[:,ind,ind], self.t,
                  self.vt[:,ind], pid, path)
-            
+            '''
             # auto-correlation analysis
-            # R0 = np.fft.ifft(self.target_Sw[:,ind, ind], n=self.M, axis=0) / 2 / np.pi
-            # t1, R_jk = self._temporal_corr(pid, pid, 1000)
-            # # Rt = acf(self.vt[:,ind], nlags=self.M, fft=False)
-            # n = 2000
-            # Rt = np.zeros(n)
-            # n = self.M
-            # Rt = signal.correlate(self.vt[:,ind].flatten(), self.vt[:,ind].flatten(), "same", method="fft")
-            # print(self.vt.shape)
-            # Rt /= self.M
-            # print(Rt.shape)
-            # lags = 2000
+            R0 = np.fft.ifft(self.target_Sw[:,ind, ind], n=self.M, axis=0)
+            t1, R_jk = self._temporal_corr(pid, pid, 1000)
+            # Rt = acf(self.vt[:,ind], nlags=self.M, fft=False)
+            n = 2000
+            Rt = np.zeros(n)
+            n = self.M
+            Rt = signal.correlate(self.vt[:,ind].flatten(), self.vt[:,ind].flatten(), "same", method="fft")
+            print(self.vt.shape)
+            Rt /= self.M
+            print(Rt.shape)
+            lags = 2000
             # Rt1 = autocorrelation(self.vt[:,ind].flatten(), lags)
             # print(Rt1.shape)
 
-            # print(np.sum(self.vt[:,ind] * self.vt[:,ind]) / self.M)
+            print(np.sum(self.vt[:,ind] * self.vt[:,ind]) / self.M)
 
 
-        #     fig, ax = plt.subplots()
-        #     t = np.arange(len(R0)) * self.dt
-        #     ax.plot(t, R0.real, c='black', lw=1)
-        #     ax.plot(t, R0.imag, c='red', lw=1, ls="dashed")
-        #     # ax.plot(np.arange(len(Rt)//2) * self.dt, Rt[len(Rt)//2:], c="green", lw=1, ls="dashed")
-        #     # ax.plot(np.arange(lags) * self.dt, Rt1, c="blue", lw=2)
-        #     # ax.plot(t1, R_jk, c="green")
-        #     plt.show()
-        #     plt.close(fig)
+            fig, ax = plt.subplots()
+            t = np.arange(len(R0)) * self.dt
+            ax.plot(t, R0.real, c='black', lw=1)
+            ax.plot(t, R0.imag, c='red', lw=1, ls="dashed")
+            # ax.plot(np.arange(len(Rt)//2) * self.dt, Rt[len(Rt)//2:], c="green", lw=1, ls="dashed")
+            # ax.plot(np.arange(lags) * self.dt, Rt1, c="blue", lw=2)
+            # ax.plot(t1, R_jk, c="green")
+            plt.show()
+            plt.close(fig)
 
         # # cross-correlation analysis
         # n = len(self.target_PIDs)
@@ -694,43 +709,11 @@ if __name__ == "__main__":
     gust1.generate(mean=True, method="fft")
     # gust1.generate(mean=False, method="deodatis")
     start = time.time()
+    # gust1.coherence_test()
     # gust2.generate(method="deodatis")
-    gust1.save()
+    # gust1.save()
     end = time.time()
     print("cost: ", end - start)
     gust1.error()
 
-    # # compare fft and no-fft
-    # fig, axs = plt.subplots(nrows=1, ncols=2)
-    # axs = axs.flatten()
-    # # time history
-    # t1 = gust1.dt * np.arange(gust1.M)
-    # # t2 = gust2.dt * np.arange(1, 1+gust2.M)
-    # dt = gust1.dt
-    # axs[0].plot(t1, gust1.vt[:,0], lw=1, c="black", label="fft")
-    # axs[0].plot(t1, gust2.vt[:,0], lw=1, c="red", label="Deodatis", ls="dashed")
-    # axs[0].grid(True)
-    # axs[0].legend()
-
-    # # spectrum
-    # fs = 1 / dt
-    # fxx1, pxx1 = signal.welch(gust1.vt[:,0], fs=fs, window="hann", 
-    #                         nperseg=gust1.M, scaling="density")
-    # fxx2, pxx2 = signal.welch(gust2.vt[:,0], fs=fs, window="hann",
-    #                         nperseg=gust2.M, scaling="density")
-    # # remove f > self.wup / 2 / pi
-    # ind = np.where(fxx1 < gust1.wup / 2.0 / np.pi)
-    # fxx1 = fxx1[ind]
-    # pxx1 = pxx1[ind]
-    # fxx2 = fxx2[ind]
-    # pxx2 = pxx2[ind]
-    # w = np.arange(gust1.dw, gust1.wup + gust1.dw, gust1.dw)
-
-    # axs[1].loglog(fxx1, pxx1, lw=1, c="black", label="fft")
-    # axs[1].loglog(fxx2, pxx2, lw=1, c="red", label="Deodatis", ls="dashed")
-    # axs[1].loglog(w/2/np.pi, gust1.target[:,0,0]*2*np.pi, c="green", lw=1)
-    # axs[1].grid(True)
-    # axs[1].legend()
-
-    # plt.show()
-    # plt.close(fig)
+   
