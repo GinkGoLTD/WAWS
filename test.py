@@ -1,6 +1,8 @@
 import numpy as np
 import scipy.integrate as integrate
 import matplotlib.pyplot as plt
+import numba
+import multiprocessing as mp
 
 class Father(object):
     def __init__(self, name, age):
@@ -47,70 +49,25 @@ def autocorrelation(x,lags):
 def coherence(w, cx, cz, dx, dz, Uz1, Uz2):
     return np.exp(-w / 2.0 / np.pi * cz * dz / 0.5 / (Uz1 + Uz2))
 
+import time
+
+
+
 
 
 if __name__ == "__main__":
-    # me = Father("ta", 30)
-    # print(me.age)
-    # me.change(20)
-    # print(me.age)
-    # func("my")
-    # high_func(func,"my", a=1, b=2)
-    # high_func(eval("func"), "my")
 
-
-    # v10 = 30
-    # I10 = 0.14
-    # d = 0.15
-    # z = np.arange(1, 101, 10, dtype=np.float64)
-    # Iz = I10 * (z / 10.0) ** (-d)
-    # sigma_z = (Iz * z) ** 2
-
-    # k = 0.005
-    # simga_z1_ = np.zeros_like(z, dtype=np.float64)
-    # simga_z2_ = np.zeros_like(z, dtype=np.float64)
-
-    # for i in range(z.size):
-    #     x = integrate.quad(davenport1, 0, np.inf, args=(v10, I10, sigma_z[i], k))
-    #     # print(x)
-    #     # simga_z1_[i] = float(x[0]) / 2.0 / np.pi
-    #     simga_z1_[i] = float(x[0])
-    #     # print(type(simga_z_[i]))
-    #     # print(simga_z_[i])
-
-    #     y = integrate.quad(davenport2, 0, np.inf, args=(v10, I10, sigma_z[i], k))
-    #     simga_z2_[i] = float(y[0])
-    
-    # # print("sigma2: ", (I10 * v10) ** 2 * 2.0 * np.pi)
-    # print(z)
-    # print(sigma_z)
-    # print(simga_z1_)
-    # print(simga_z2_)
-
-    # fig, ax = plt.subplots()
-    # ax.scatter(sigma_z, z, marker="s", c="black", s=20)
-    # ax.scatter(simga_z1_, z, marker="o", c="red", s=20)
-    # ax.scatter(simga_z2_, z, marker="o", c="green", s=20)
-    # plt.show()
-    # plt.close(fig)
-
-    # f = np.arange(0, 4, 0.1)
-    # fig, ax = plt.subplots()
-    # ax.plot(f, davenport1(f, v10, I10, sigma_z[1], k), lw=1, c="black")
-    # ax.plot(f, davenport2(f, v10, I10, sigma_z[1], k), lw=1, c="red")
-    # ax.plot(f, davenport2(f, v10, I10, sigma_z[1], k) / 2.0 / np.pi, c="green")
-    # plt.show()
-    # plt.close(fig)
-
-    w = np.arange(0, 100, 0.01)
-    cx, cz = 7, 8
-    dx, dz = 5, 5
-    Uz1 = 30
-    Uz2 = 32
-    coh = coherence(w, cx, cz, dx, dz, Uz1, Uz2)
-    cohf = np.exp(-w * cz * dz / 0.5 / (Uz1 + Uz2))
-    fig, ax = plt.subplots()
-    ax.semilogx(w/2.0/np.pi, coh , c="black", lw=2)
-    ax.semilogx(w, cohf, c="red", lw=2, ls="dashed")
-    plt.show()
-    plt.close(fig)
+    # Sw = np.arange(1, 100*100*200 + 1, 1).reshape(200, 100, 100)
+    Sw = np.random.randn(200, 100, 100)
+    for i in range(200):
+        Sw[i,:,:] = np.matmul(Sw[i,:,:], Sw[i,:,:].transpose()) + np.eye(100) * 0.01
+    # Sw = np.ones((200, 100, 100))
+    t1 = time.time()
+    Hw1 = np.linalg.cholesky(Sw)
+    t2 = time.time()
+    Hw2 = cholesky(Sw)
+    t3 = time.time()
+    print("np.linalg.cholesky cost: ", t2 - t1)
+    print("cholesky cost: ", t3 - t2)
+    print("Hw1:", Hw1[0,:,:])
+    print("Hw2:", Hw2[0,:,:])

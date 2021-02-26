@@ -1,14 +1,15 @@
 import os
-import time
 import configparser
 import numpy as np
 from scipy import signal
 import matplotlib.pyplot as plt
-from statsmodels.tsa.stattools import acf
 import numba
 np.seterr(divide="print")
 
-
+__import__ = ["davenport", "karman", "harris", "simiu", "kaimal", 
+              "plot_time_history", "plot_spectrum", "plot_coherence", 
+              "plot_stats", "plot_correlation", 
+              "ConfigData", "GustWindField"]
 ###############################################################################
 #                              Spectra Function                               #
 ###############################################################################
@@ -37,7 +38,7 @@ def davenport(f, sigma2, **kwargs):
 
 def karman(f, sigma2, **kwargs):
     """ one-side Von Karman spectrum 
-    
+
     Args:
         f (1d-ndarray): freqency, unit: Hz
         sigma2 (float): variance, (Iu * vz) ** 2
@@ -46,15 +47,12 @@ def karman(f, sigma2, **kwargs):
         z (float): height, unit:m
         vz (float): mean wind speed at z height, unit: m/s
     """
-
-
     vz = kwargs["vz"]
     z = kwargs["z"]
     Lu = 100 * (z / 30) ** 0.5
     x = f * Lu / vz
     ret = sigma2 / f * 4.0 * x / ((1 + 70.8 * x * x) ** (5.0 / 6))
     return ret
-
 
 def harris(f, sigma2, **kwargs):
     """ one-side Harris spectra, adopted in Austrilia code
@@ -111,7 +109,6 @@ def kaimal(f, sigma2, **kwargs):
     z = kwargs["z"]
     l = kwargs["l"]
     epsilon = kwargs["epsilon"]
-
     Lu = l * (z / 10) ** epsilon
     x = f * Lu / vz 
     ret = sigma2 / f * 6.868 * x / ((1 + 10.302 * x) ** (5.0 / 3))
@@ -127,7 +124,6 @@ def cross_spectrum(Sw, coh):
     for i in range(npts):
         for j in range(npts):
             Sw[:,i,j] = (np.sqrt(Sw[:,i,j] * Sw[:,i,j]) * coh[:,i,j])
-
 
 @numba.jit(nopython=True)
 def synthesis(Hw, nfreq, m, dw, npts, phi, t):
@@ -184,7 +180,6 @@ def plot_time_history(t, x, pid, path=None):
                   "wind_speed_of_point_" + str(pid) + ".svg")
         plt.savefig(figname, dpi=300)
     plt.close(fig)
-    
 
 def plot_spectrum(f, sf, t, x, pid=None, path=None):
     # power spectrum, S(f)
@@ -198,7 +193,7 @@ def plot_spectrum(f, sf, t, x, pid=None, path=None):
 
     fig, ax = plt.subplots(figsize=np.array([8,6])/2.54, tight_layout=True)
     ax.loglog(fxx, pxx, c="black", lw=0.5, label="simulated")
-    ax.loglog(f, sf, c="red", lw=2, label="target")
+    ax.loglog(f, sf, c="red", lw=2, ls="dashed", label="target")
     ax.set_xlabel("f (Hz)")
     ax.set_ylabel(r"$S(f) (m^2/s)$")
     ax.legend()
@@ -213,7 +208,7 @@ def plot_spectrum(f, sf, t, x, pid=None, path=None):
 def plot_coherence(f, cxy, f_, cxy_, figname=None):
     fig, ax = plt.subplots(figsize=np.array([8,7])/2.54, tight_layout=True)
     ax.semilogx(f_, cxy_, c="black", lw=1, label="simulated")
-    ax.semilogx(f, cxy, c="red", lw=2, label="target")
+    ax.semilogx(f, cxy, c="red", lw=2, ls="dashed", label="target")
     ax.grid(True)
     ax.set_xlabel("f (Hz)", fontsize=12, fontstyle="italic")
     ax.set_ylabel("coherence function", fontsize=12)
@@ -226,7 +221,7 @@ def plot_coherence(f, cxy, f_, cxy_, figname=None):
 
 def plot_stats(Xz, z, Xz_, z_, ylabel,figname=None):
     fig, ax = plt.subplots(figsize=np.array([8,7])/2.54, tight_layout=True)
-    ax.plot(Xz, z, c="red", lw=2, label="target")
+    ax.plot(Xz, z, c="red", lw=2, ls="dashed", label="target")
     ax.scatter(Xz_, z_, c="black", s=20, marker="o", label="simulated", 
                zorder=2.5)
     ax.grid(True)
@@ -238,6 +233,25 @@ def plot_stats(Xz, z, Xz_, z_, ylabel,figname=None):
     else:
         plt.savefig(figname, dpi=300)
     plt.close(fig)
+
+def plot_correlation(tau, corr, tau_, corr_, max_lags, figname=None):
+    ind = np.where(np.abs(tau) < max_lags)
+    tau, corr = tau[ind], corr[ind]
+    ind = np.where(np.abs(tau_) < max_lags)
+    tau_, corr_ = tau_[ind], corr_[ind]
+
+    fig, ax = plt.subplots(figsize=np.array([8,6])/2.54, tight_layout=True)
+    ax.plot(tau_, corr_, c="black", lw=1, label="simulated")
+    ax.plot(tau, corr, c="red", lw=1, ls="dashed",label="target")
+    ax.grid(True)
+    ax.set_xlabel(r"$\tau$ (s)")
+    ax.set_ylabel("correlation function")
+    plt.legend(fontsize=9)
+    if figname is None:
+        plt.pause(5)
+    else:
+        plt.savefig(figname, dpi=300)
+    plt.close(fig) 
 
 
 ###############################################################################
@@ -472,7 +486,7 @@ class GustWindField(object):
         if self.Sw is None:
             raise UnboundLocalError("Does not generate spectrum martix!")
         npts = len(self.points)
-        Hw = np.zeros_like(self.Sw,)
+        Hw = np.zeros_like(self.Sw)
         for i in range(len(self.wml)):
             Hw[i,:,:] = np.linalg.cholesky(self.Sw[i,:,:])
 
@@ -549,7 +563,17 @@ class GustWindField(object):
         head = ["f(Hz)"] + [str(self.points[i,0]) for i in range(npts)]
         np.savetxt(fname, ans, delimiter=",", header=",".join(head))
 
-    def stats_test(self, save=True):
+        # plot wind velocity and spectrum
+        for p in self.target_PIDs:
+            ind = np.where(self.points[:,0]==p)[0]
+            vt = self.vt[:,ind].flatten()
+            plot_time_history(self.t, vt, p, path)
+            # Sf = 2 * pi * Sw
+            f = self.wml[:self.N] / 2.0 / np.pi
+            Sf = self.target_Sw[:,ind,ind] * 2.0 * np.pi
+            plot_spectrum(f, Sf, self.t, vt, p, path)
+
+    def stats_test(self):
         # check wind profile
         z = np.arange(0, np.max(self.points[:,3])+1, 1)
         vz = self.v10 * (z / 10) ** self.alpha
@@ -566,7 +590,7 @@ class GustWindField(object):
         Iz_ = Iz_.reshape(-1,1)
         # plot
         figname = os.path.join(self.workdir, "results", "turbulence.svg")
-        plot_stats(Iz, z, Iz_, z_, "Iu (m/s)", figname)
+        plot_stats(Iz, z, Iz_, z_, r"$I_u$", figname)
 
         # save all the data
         data = np.hstack((z_, vz_, Iz_))
@@ -589,131 +613,75 @@ class GustWindField(object):
                             "coh_p" + str(p1) + "_p" + str(p2) + ".svg")
                 plot_coherence(f, cxy, f_, cxy_, figname)
 
+    def correlation_test(self, max_lags=100):
+        for p in self.target_PIDs:
+            ind = np.where(self.points[:,0]==p)[0]
+            # target, Sw is two-side spectrum, Sf = 2.0 * pi * Sw * 2
+            Sf = 2.0 * np.pi * self.Sw[:self.N,ind,ind].flatten() * 2
+            corr = np.fft.ifft(Sf, n=self.M) / self.dt
+            corr = np.concatenate((corr[self.M//2:], corr[:self.M//2]))
+            tau = np.arange(-self.M//2, self.M//2, 1) * self.dt
 
-    def _temporal_corr(self, p1, p2, lags):
-        ind1 = np.where(self.points[:,0]==p1)[0]
-        ind2 = np.where(self.points[:,0]==p2)[0]
-        print(ind1)
-        Rjk = np.zeros(lags)
-        t = np.arange(lags) * self.dt
-        w_t = np.zeros((self.N, t.size))
-        for i in range(self.N):
-            w_t[i,:] = np.cos(self.wml[i] * t.reshape(1,-1))
-        print(w_t)
-        print(w_t.shape)
-        Hw2 = np.zeros((self.N,1))
-        for i in range(npts):
-            Hw2 += np.abs(self.Hw[:self.N,ind1,i] * 
-                   self.Hw[:self.N,ind2,i])
+            # simulated
+            v = self.vt[:,ind].flatten()
+            v -= v.mean()
+            corr_ = np.correlate(v, v, "full") / len(v)
+            tau_ = np.arange(-self.M+1, self.M, 1) * self.dt
+            tau_ = tau_[self.M//2:3*self.M//2]
+            corr_ = corr_[self.M//2:3*self.M//2]
 
-        for i in range(lags):
-            tmp = np.sum(Hw2 * w_t[:,i].reshape(-1,1), axis=0) * self.dw * 2
-            Rjk[i] = tmp
-        return t, Rjk
+            # plot correlation
+            figname = os.path.join(self.workdir, "results",
+                        "auto_correlation_p" + str(p) + ".svg")
+            plot_correlation(tau, corr.real, tau_, corr_, max_lags,figname)
 
-    def ergodicity_test(self):
-        pass
+    def ergodicity_test(self, max_lags=100):
+        for i in range(len(self.target_PIDs)):
+            for j in range(i):
+                p1, p2 = self.target_PIDs[i], self.target_PIDs[j]
+                ind1 = np.where(self.points[:,0]==p1)[0]
+                ind2 = np.where(self.points[:,0]==p2)[0]
+
+                # target, Sw is two-side spectrum, Sf = 2.0 * pi * Sw * 2
+                Sf = 2.0 * np.pi * self.Sw[:self.N,ind1,ind2].flatten() * 2
+                corr = np.fft.ifft(Sf, n=self.M) / self.dt
+                corr = np.concatenate((corr[self.M//2:], corr[:self.M//2]))
+                tau = np.arange(-self.M//2, self.M//2, 1) * self.dt
+
+                # simulated
+                v1 = self.vt[:,ind1].flatten()
+                v2 = self.vt[:,ind2].flatten()
+                v1 -= v1.mean()
+                v2 -= v2.mean()
+                corr_ = np.correlate(v1, v2, "full") / len(v1)
+                tau_ = np.arange(-self.M+1, self.M, 1) * self.dt
+                tau_ = tau_[self.M//2:3*self.M//2]
+                corr_ = corr_[self.M//2:3*self.M//2]
+
+                # plot correlation
+                figname = os.path.join(self.workdir, "results", 
+                            "corr_p" + str(p1) + "_p" + str(p2) + ".svg")
+                plot_correlation(tau, corr.real, tau_, corr_, max_lags, figname)
 
     def error(self):
-        # create directory
-        path = os.path.join(self.workdir, "results")
-        if not os.path.exists(path):
-            os.makedirs(path)
-
-        # basic compare, mean wind speed and turbulence intensity
-        # self.stats_test()
-
-        # spectrum compare
-        for pid in self.target_PIDs:
-            # check pid exists?
-            ind = np.where(self.points[:,0]==pid)[0]
-            if (ind.size == 0):
-                raise Warning("Unvalid points ID: ", pid)
-            '''
-            # plot time_history
-            plot_time_history(self.t, self.vt[:,ind], pid, path)
-
-            # compare spectrum
-            if not self.double_index:
-                freq = self.wml
-            else:
-                freq = self.wml[:self.N]
-            freq = freq / 2.0 / np.pi
-            # S(w) = S(f) / 2 / np.pi
-            plot_spectrum(freq, 2.0*np.pi*self.target_Sw[:,ind,ind], self.t,
-                 self.vt[:,ind], pid, path)
-            '''
-            # auto-correlation analysis
-            R0 = np.fft.ifft(self.target_Sw[:,ind, ind], n=self.M, axis=0)
-            t1, R_jk = self._temporal_corr(pid, pid, 1000)
-            # Rt = acf(self.vt[:,ind], nlags=self.M, fft=False)
-            n = 2000
-            Rt = np.zeros(n)
-            n = self.M
-            Rt = signal.correlate(self.vt[:,ind].flatten(), self.vt[:,ind].flatten(), "same", method="fft")
-            print(self.vt.shape)
-            Rt /= self.M
-            print(Rt.shape)
-            lags = 2000
-            # Rt1 = autocorrelation(self.vt[:,ind].flatten(), lags)
-            # print(Rt1.shape)
-
-            print(np.sum(self.vt[:,ind] * self.vt[:,ind]) / self.M)
-
-
-            fig, ax = plt.subplots()
-            t = np.arange(len(R0)) * self.dt
-            ax.plot(t, R0.real, c='black', lw=1)
-            ax.plot(t, R0.imag, c='red', lw=1, ls="dashed")
-            # ax.plot(np.arange(len(Rt)//2) * self.dt, Rt[len(Rt)//2:], c="green", lw=1, ls="dashed")
-            # ax.plot(np.arange(lags) * self.dt, Rt1, c="blue", lw=2)
-            # ax.plot(t1, R_jk, c="green")
-            plt.show()
-            plt.close(fig)
-
-        # # cross-correlation analysis
-        # n = len(self.target_PIDs)
-        # for i in range(1,n):
-        #     for j in range(i):
-        #         # if i == j: continue
-        #         ind1 = np.where(self.points[:,0]==self.target_PIDs[i])[0]
-        #         ind2 = np.where(self.points[:,0]==self.target_PIDs[j])[0]
-        #         R0_jk = np.fft.ifft(self.Sw[:self.N,ind1,ind2] / 2 / np.pi, axis=0)
-        #         print(R0_jk.shape)
-        #         t = np.arange(len(R0_jk)) * self.dt
-
-        #         R_jk = signal.correlate(self.vt[:,ind1].flatten(), self.vt[:,ind2].flatten(), "same") / self.M
-
-        #         fig, ax = plt.subplots()
-        #         ax.plot(t, R0_jk.real, c="black", lw=1)
-        #         ax.plot(t, R0_jk.imag, c="red", lw=1)
-        #         # ax.plot(np.arange(len(R_jk)//2) * self.dt, R_jk[len(R_jk)//2:])
-        #         plt.show()
-        #         plt.close(fig)
-
-        # coherence analysis
-
+        self.stats_test()
+        self.coherence_test()
+        self.correlation_test()
+        self.ergodicity_test()
 
 
 if __name__ == "__main__":
-    start = time.time()
     config = ConfigData("config.ini")
 
-    npts = 5
-    points = np.zeros((npts,4))
-    for i in range(1,npts+1):
-        points[i-1, 0] = i
-        points[i-1, 3] = i * 10
-    gust1 = GustWindField(config, points)
-    # gust2 = GustWindField(config, points)
-    gust1.generate(mean=True, method="fft")
-    # gust1.generate(mean=False, method="deodatis")
-    start = time.time()
-    # gust1.coherence_test()
-    # gust2.generate(method="deodatis")
-    # gust1.save()
-    end = time.time()
-    print("cost: ", end - start)
-    gust1.error()
+    # npts = 5
+    # points = np.zeros((npts,4))
+    # for i in range(1,npts+1):
+    #     points[i-1, 0] = i
+    #     points[i-1, 3] = i * 10
 
+    # gust = GustWindField(config, points)
+    gust = GustWindField(config)
+    gust.generate(mean=True, method="fft")
+    gust.save()
+    gust.error()
    
