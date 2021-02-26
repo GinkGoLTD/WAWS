@@ -22,7 +22,7 @@ S(w) = \begin{bmatrix} S_{11}(\omega) &  S_{12}(\omega)  ...  & S_{1n}(\omega) \
 				   . & ........ & . \\
 				   S_{n1}(\omega) &  S_{n2}(\omega)  ...  & S_{nn}(\omega) \\\end{bmatrix}\\
 				   
-S_{ij}(\omega)=\sqrt{ S_{12}(\omega) S_{12}(\omega)}coh(x_i,x_j,y_i,y_j,z_i,z_j,\omega)
+S_{ij}(\omega)=\sqrt{ S_{i}(\omega) S_{j}(\omega)}coh(x_i,x_j,y_i,y_j,z_i,z_j,\omega)
 $$
 
 **Step 3: **对互谱密度矩阵进行cholesky分解
