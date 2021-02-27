@@ -10,6 +10,8 @@ __import__ = ["davenport", "karman", "harris", "simiu", "kaimal",
               "plot_time_history", "plot_spectrum", "plot_coherence", 
               "plot_stats", "plot_correlation", 
               "ConfigData", "GustWindField"]
+
+
 ###############################################################################
 #                              Spectra Function                               #
 ###############################################################################
@@ -405,7 +407,7 @@ class GustWindField(object):
         # other attributes
         self.coh = None
         self.Sw = None
-        self.Hw = None
+        # self.Hw = None
 
     @staticmethod
     def wind_profile(z, v10, alpha):
@@ -439,27 +441,24 @@ class GustWindField(object):
         if (self.T > 2.0 * np.pi / self.dw):
             raise Warning("T > T0! Please increase N!")
 
-    def _spectrum(self, func):
+    def _spectrum(self, func, wml):
         if self.points is None:
             raise UnboundLocalError("Does not exsit simulated points!")
         npts = len(self.points)
-        self.Sw = np.zeros((len(self.wml), npts, npts), dtype=np.float64)
+        Sw = np.zeros((len(wml), npts, npts), dtype=np.float64)
 
         for i in range(npts):
             sigma2 = (self.Iu[i] * self.vz[i]) ** 2
             kwargs = {"v10": self.v10, "vz": self.vz[i], "z": self.points[i,3],
                       "l": self.l, "epsilon": self.epsilon}
-            self.Sw[:,i,i] = (func(self.wml / 2.0 / np.pi, sigma2, **kwargs) 
+            Sw[:,i,i] = (func(wml / 2.0 / np.pi, sigma2, **kwargs) 
                               / 2.0 / np.pi / 2.0)
+        return Sw
 
-        if not self.double_index:
-            self.target_Sw = self.Sw   # single indexing frequency
-        else:
-            self.target_Sw = self.Sw[:self.N,:,:]  # double indexing frequency
-
-    def _coherence(self):
+    def _coherence(self, wml):
         npts = len(self.points)
-        self.coh = np.zeros((len(self.wml), npts, npts), dtype=np.float64)
+        coh = np.zeros((len(wml), npts, npts), dtype=np.float64)
+
         x = self.points[:,1]
         y = self.points[:,2]
         z = self.points[:,3]
@@ -467,36 +466,28 @@ class GustWindField(object):
 
         for i in range(npts):
             for j in range(npts):
-                self.coh[:,i,j] = np.exp(-2.0 * self.wml / 2 / np.pi * 
+                coh[:,i,j] = np.exp(-2.0 * wml / 2 / np.pi * 
                                   np.sqrt(cx * cx * (x[i] - x[j]) ** 2 +
                                           cy * cy * (y[i] - y[j]) ** 2 +
                                           cz * cz * (z[i] - z[j]) ** 2) /
                                   (self.vz[i] + self.vz[j]))
+        return coh
 
-    def _cross_spectrum_matrix(self):
-        if self.Sw is None or self.coh is None:
-            raise UnboundLocalError("Does not generate spectrum or coherence!")
+    def _cross_spectrum_matrix(self, Sw, coh):
+        Sxy = np.zeros_like(Sw)
         npts = len(self.points)
         for i in range(npts):
             for j in range(npts):
-                self.Sw[:,i,j] = (np.sqrt(self.Sw[:,i,i] * self.Sw[:,j,j]) *
-                                  self.coh[:,i,j])
+                Sxy[:,i,j] = (np.sqrt(Sw[:,i,i] * Sw[:,j,j]) * coh[:,i,j])
+        return Sxy
 
-    def _cholesky(self):
-        if self.Sw is None:
-            raise UnboundLocalError("Does not generate spectrum martix!")
-        npts = len(self.points)
-        Hw = np.zeros_like(self.Sw)
-        for i in range(len(self.wml)):
-            Hw[i,:,:] = np.linalg.cholesky(self.Sw[i,:,:])
-
-        self.Hw = np.zeros((self.N, npts, npts))
-        if not self.double_index:
-            self.Hw = Hw
-        else:
-            for i in range(npts):
-                s, e = i * self.N, (i + 1) * self.N
-                self.Hw[:,:,i] = Hw[s:e,:,i]
+    def _cholesky(self, Sw):
+        # npts = len(self.points)
+        Hw = np.zeros_like(Sw)
+        for i in range(self.N):
+            Hw[i,:,:] = np.linalg.cholesky(Sw[i,:,:])
+        return Hw
+ 
 
     def generate(self, mean=True, method="fft"):
         """
@@ -507,25 +498,45 @@ class GustWindField(object):
         method = method.lower()
         if method not in ["fft", "deodatis"]:
             raise ValueError("unrecongnized method! fft or deodatis?")
-
-        print("generate cross spectrum matrix...")
-        self._spectrum(eval(self.spectrum))
-        self._coherence()
-        self._cross_spectrum_matrix()
-
-        print("cholesky decompostion...")
-        self._cholesky()
+        
         npts = len(self.points)
-        self.vt = np.zeros((self.M, npts), dtype=np.float64)
+        Heff = np.zeros((self.N, npts, npts))
+        if not self.double_index:
+            print("generate cross spectrum matrix...")
+            Sw = self._spectrum(eval(self.spectrum), self.wml)
+            coh = self._coherence(self.wml)
+            Sxy = self._cross_spectrum_matrix(Sw, coh)
+            self.Sw = Sxy
+            self.coh = coh
 
+            print("cholesky decompostion...")
+            Heff = self._cholesky(Sxy)
+        else:
+            for i in range(npts):
+                print("processing piont: ", i)
+                print("generate cross spectrum matrix...")
+                s, e = i * self.N, (i + 1) * self.N
+                wml = self.wml[s:e]
+                Sw = self._spectrum(eval(self.spectrum), wml)
+                coh = self._coherence(wml)
+                Sxy = self._cross_spectrum_matrix(Sw, coh)
+                if i == 0:
+                    self.Sw = Sxy
+                    self.coh = coh
+
+                print("cholesky decompostion...")
+                Hw = self._cholesky(Sxy)
+                Heff[:,:,i] = Hw[:,:,i]
+
+        self.vt = np.zeros((self.M, npts), dtype=np.float64)
         print("synthesis gust wind speed...")
         np.random.seed(0)
         phi = 2 * np.pi * np.random.rand(npts, self.N)
         dw = self.dw
         if method == "deodatis":
-            self.vt = synthesis(self.Hw, self.N, self.M, dw, npts, phi, self.t)
+            self.vt = synthesis(Heff, self.N, self.M, dw, npts, phi, self.t)
         elif method == "fft":
-            self.vt = fft_synthesis(self.Hw, self.N, self.M, dw, npts, phi,
+            self.vt = fft_synthesis(Heff, self.N, self.M, dw, npts, phi,
                                     self.t)
         else:
             raise ValueError("Unrecongnized method: " + method)
@@ -553,7 +564,7 @@ class GustWindField(object):
         target = np.zeros((self.N, npts), dtype=np.float64)
         for i in range(npts):
             for j in range(npts):
-                target[:,i] = self.target_Sw[:,i,j] * 2.0 * np.pi
+                target[:,i] = self.Sw[:,i,j] * 2.0 * np.pi
         if not self.double_index:
             freq = self.wml
         else:
@@ -570,7 +581,7 @@ class GustWindField(object):
             plot_time_history(self.t, vt, p, path)
             # Sf = 2 * pi * Sw
             f = self.wml[:self.N] / 2.0 / np.pi
-            Sf = self.target_Sw[:,ind,ind] * 2.0 * np.pi
+            Sf = self.Sw[:,ind,ind] * 2.0 * np.pi
             plot_spectrum(f, Sf, self.t, vt, p, path)
 
     def stats_test(self):
@@ -668,20 +679,3 @@ class GustWindField(object):
         self.coherence_test()
         self.correlation_test()
         self.ergodicity_test()
-
-
-if __name__ == "__main__":
-    config = ConfigData("config.ini")
-
-    # npts = 5
-    # points = np.zeros((npts,4))
-    # for i in range(1,npts+1):
-    #     points[i-1, 0] = i
-    #     points[i-1, 3] = i * 10
-
-    # gust = GustWindField(config, points)
-    gust = GustWindField(config)
-    gust.generate(mean=True, method="fft")
-    gust.save()
-    gust.error()
-   

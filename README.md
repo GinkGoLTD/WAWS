@@ -1,23 +1,67 @@
 # WAWS
 
 #### 介绍
-谐波合成法(Weighted Amplitude Wave Superposition Method)生成脉动风荷载
+
+WAWS is a generalized solver for wind simulation by utilizing **weighted  Amplitude Wave Superpostion method**. Although it is a quite mature and wide-used method, there is no avaible python module for it.  
+
+
+
+WAWS is developed as an open-source code with the following objectives:
+
+- an open, well-documented implementation of the WAWS models for modeling stationary gust wind field;
+- be capable of simulated several wind spectrum, such as Davenport, Harris and Simiu etc.;
+
+I hope that this program will be used by research laboratories, academia, and industry to simulated gust wind fields.
+
+ The program is still under development. New featrues will be added:
+
+- [ ] The interpolation algorithm will be introduced to  acclerate the decompositon of cross-spectrum matrix
+- [ ] Non-stationay gust wind simulation
+- [ ] Other wind simulation method
+
+
+
+I am still struggling with my Doctoral thesis, the new featrue will developed in futrue.
+
+
 
 #### 软件架构
-软件架构说明
+The program is consisted of several spectrum functions, helper functions and two classes (`ConfigData, GustWindField`).  All the simulating parameters are inputed in "config.ini" file, and the `ConfigData` class is implemented to parse the the "config.ini" file.  And the `GustWindField` class is in charge of the whole process of the WAWS. 
 
+  
 
 #### 安装教程
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+1. make sure you have installed the following modules:
+
+   - numpy
+   - scipy
+   - matplotlib
+   - numba
+
+2. don not need to install, just download and copy to your project directory, and
+
+3. `import waws`
+
+   
 
 #### 使用说明
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+it is easy to use. 
+
+``` python
+import waws
+
+
+if __name__ == "__main__":
+    config = waws.ConfigData("config.ini")
+    gust = waws.GustWindField(config)
+    gust.generate(mean=True, method="fft")
+    gust.save()
+    gust.error()
+```
+
+
 
 #### 参与贡献
 
@@ -27,11 +71,4 @@
 4.  新建 Pull Request
 
 
-#### 特技
-
-1.  使用 Readme\_XXX.md 来支持不同的语言，例如 Readme\_en.md, Readme\_zh.md
-2.  Gitee 官方博客 [blog.gitee.com](https://blog.gitee.com)
-3.  你可以 [https://gitee.com/explore](https://gitee.com/explore) 这个地址来了解 Gitee 上的优秀开源项目
-4.  [GVP](https://gitee.com/gvp) 全称是 Gitee 最有价值开源项目，是综合评定出的优秀开源项目
-5.  Gitee 官方提供的使用手册 [https://gitee.com/help](https://gitee.com/help)
-6.  Gitee 封面人物是一档用来展示 Gitee 会员风采的栏目 [https://gitee.com/gitee-stars/](https://gitee.com/gitee-stars/)
+#### 
